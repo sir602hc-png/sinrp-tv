@@ -86,15 +86,20 @@ function command(action,seconds=0,id=''){
 // Unity supplies an absolute current content position, not a browser clock timestamp.
 window.SinRPTV={
   connect(object,method){bridge={object,method};report({type:'ready',ready});},
+  disconnect(){bridge=null;pending=null;revision=-1;if(ready)player.pauseVideo();},
   applyState(state){
     if(!state || !/^[A-Za-z0-9_-]{11}$/.test(state.videoId||''))return;
     if(!Number.isFinite(state.seconds)||state.seconds<0)return;
     if(Number.isFinite(state.revision)&&state.revision<revision)return;
     pending=state;if(!ready)return;
     if(Number.isFinite(state.revision))revision=state.revision;
-    if(loadedId!==state.videoId){loadedId=state.videoId;player.cueVideoById({videoId:loadedId,startSeconds:state.seconds});}
-    else if(Math.abs(player.getCurrentTime()-state.seconds)>2)player.seekTo(state.seconds,true);
-    if(state.playing)player.playVideo();else player.pauseVideo();
+    if(loadedId!==state.videoId){loadedId=state.videoId;
+      if(state.playing)player.loadVideoById({videoId:loadedId,startSeconds:state.seconds});
+      else player.cueVideoById({videoId:loadedId,startSeconds:state.seconds});
+    }else{
+      if(state.force||Math.abs(player.getCurrentTime()-state.seconds)>2)player.seekTo(state.seconds,true);
+      if(state.playing)player.playVideo();else player.pauseVideo();
+    }
     status.textContent='Connected to domicile TV. Playback may differ during ads or buffering.';
   },
   requestStatus(){if(ready)report({type:'playback',videoId:loadedId,seconds:player.getCurrentTime(),state:player.getPlayerState()});}
