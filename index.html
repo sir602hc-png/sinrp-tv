@@ -11,9 +11,12 @@ main{max-width:1280px;margin:auto;padding:12px}.screen{width:100%;aspect-ratio:1
 iframe{width:100%;height:100%;border:0}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0}
 input,button{font:inherit;padding:12px;border-radius:6px;border:1px solid #62666e}input{flex:1;min-width:240px;background:#222;color:white}
 button{background:#303744;color:white;cursor:pointer}button:disabled{opacity:.4}#status{font-size:15px;color:#c5c9d1}
+#results{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;max-height:340px;overflow:auto}.result{text-align:left}.result img{width:100%;aspect-ratio:16/9;object-fit:cover}.result span{display:block;margin-top:6px;font-size:16px}.result small{display:block;color:#c5c9d1}
 </style>
 </head>
 <body><main>
+<form id="searchForm" class="row"><input id="query" aria-label="Search YouTube" placeholder="Search YouTube by title, artist, or keywords" maxlength="120" autocomplete="off"><button id="searchButton" type="submit">Search YouTube</button></form>
+<p id="searchStatus" role="status"></p><div id="results" aria-label="YouTube search results"></div>
 <div class="screen"><div id="player"></div></div>
 <form id="loadForm" class="row"><input id="video" aria-label="YouTube video URL or ID" placeholder="Paste a YouTube video link" autocomplete="off"><button type="submit">Load Video</button></form>
 <div class="row"><button id="play">Play</button><button id="pause">Pause</button><button id="back">Back 10s</button><button id="forward">Forward 10s</button><button id="sync">Sync to TV</button></div>
@@ -23,6 +26,40 @@ button{background:#303744;color:white;cursor:pointer}button:disabled{opacity:.4}
 'use strict';
 let player, ready=false, bridge=null, pending=null, loadedId='', revision=-1;
 const status=document.getElementById('status');
+// Public service address only. The YouTube API key belongs in the worker secret, never here.
+const SEARCH_ENDPOINT='https://sinrp-tv-search.sir602hc.workers.dev/';
+let searchBusy=false,lastSearch=0;
+const searchCache=new Map();
+function showResults(items){
+  const root=document.getElementById('results');root.replaceChildren();
+  for(const item of items){
+    if(!/^[A-Za-z0-9_-]{11}$/.test(item.videoId||''))continue;
+    const button=document.createElement('button');button.type='button';button.className='result';
+    const image=document.createElement('img');image.alt='';image.loading='lazy';
+    try{const u=new URL(item.thumbnail);if(u.protocol==='https:'&&u.hostname==='i.ytimg.com'){image.src=u.href;button.appendChild(image);}}catch{}
+    const title=document.createElement('span');const decoder=document.createElement('textarea');decoder.innerHTML=item.title;title.textContent=decoder.value;button.appendChild(title);
+    const channel=document.createElement('small');channel.textContent=item.channel;button.appendChild(channel);
+    button.onclick=()=>command('load',0,item.videoId);root.appendChild(button);
+  }
+}
+document.getElementById('searchForm').addEventListener('submit',async event=>{
+  event.preventDefault();const query=document.getElementById('query').value.trim();const label=document.getElementById('searchStatus');
+  if(!query||searchBusy)return;
+  if(!SEARCH_ENDPOINT){label.textContent='Search service setup is not finished yet.';return;}
+  const cached=searchCache.get(query.toLowerCase());if(cached&&Date.now()-cached.time<600000){showResults(cached.items);label.textContent='Select a video to play.';return;}
+  if(Date.now()-lastSearch<5000){label.textContent='Please wait a few seconds before searching again.';return;}
+  lastSearch=Date.now();searchBusy=true;document.getElementById('searchButton').disabled=true;label.textContent='Searching YouTube...';
+  const abort=new AbortController();const timeout=setTimeout(()=>abort.abort(),15000);
+  try{
+    const url=new URL(SEARCH_ENDPOINT);url.searchParams.set('q',query);
+    const response=await fetch(url,{signal:abort.signal});const data=await response.json();
+    if(!response.ok)throw new Error(data.message||'Search unavailable.');
+    const items=Array.isArray(data.items)?data.items:[];
+    if(searchCache.size>=30)searchCache.delete(searchCache.keys().next().value);
+    searchCache.set(query.toLowerCase(),{time:Date.now(),items});showResults(items);label.textContent=items.length?'Select a video to play.':'No matching videos found.';
+  }catch(error){label.textContent=error.name==='AbortError'?'Search timed out. Please try again.':error.message;}
+  finally{clearTimeout(timeout);searchBusy=false;document.getElementById('searchButton').disabled=false;}
+});
 function report(message){
   if(bridge && window.tlab && typeof window.tlab.unitySendMessage==='function'){
     try{window.tlab.unitySendMessage(bridge.object,bridge.method,JSON.stringify(message));}catch(e){status.textContent='Unity connection unavailable.';}
