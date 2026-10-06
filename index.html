@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>SinRP TV</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#101114;color:#eee;font:18px system-ui,sans-serif}
+main{max-width:1280px;margin:auto;padding:12px}.screen{width:100%;aspect-ratio:16/9;background:#000}
+iframe{width:100%;height:100%;border:0}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0}
+input,button{font:inherit;padding:12px;border-radius:6px;border:1px solid #62666e}input{flex:1;min-width:240px;background:#222;color:white}
+button{background:#303744;color:white;cursor:pointer}button:disabled{opacity:.4}#status{font-size:15px;color:#c5c9d1}
+</style>
+</head>
+<body><main>
+<div class="screen"><div id="player"></div></div>
+<form id="loadForm" class="row"><input id="video" aria-label="YouTube video URL or ID" placeholder="Paste a YouTube video link" autocomplete="off"><button type="submit">Load Video</button></form>
+<div class="row"><button id="play">Play</button><button id="pause">Pause</button><button id="back">Back 10s</button><button id="forward">Forward 10s</button><button id="sync">Sync to TV</button></div>
+<p id="status" role="status">Loading YouTube player...</p>
+</main>
+<script>
+'use strict';
+let player, ready=false, bridge=null, pending=null, loadedId='', revision=-1;
+const status=document.getElementById('status');
+function report(message){
+  if(bridge && window.tlab && typeof window.tlab.unitySendMessage==='function'){
+    try{window.tlab.unitySendMessage(bridge.object,bridge.method,JSON.stringify(message));}catch(e){status.textContent='Unity connection unavailable.';}
+  }
+}
+function videoId(value){
+  value=value.trim(); if(/^[A-Za-z0-9_-]{11}$/.test(value))return value;
+  try{const u=new URL(value);if(!['https:','http:'].includes(u.protocol))return '';
+    const h=u.hostname.toLowerCase();let id='';
+    if(h==='youtu.be')id=u.pathname.split('/')[1];
+    else if(['youtube.com','www.youtube.com','m.youtube.com'].includes(h))id=u.searchParams.get('v') || (/^\/(shorts|embed|live)\//.test(u.pathname)?u.pathname.split('/')[2]:'');
+    return /^[A-Za-z0-9_-]{11}$/.test(id||'')?id:'';
+  }catch{return '';}
+}
+function command(action,seconds=0,id=''){
+  if(!ready){status.textContent='Please wait for YouTube to finish loading.';return;}
+  if(bridge){report({type:'command',action,seconds,videoId:id});return;}
+  if(action==='load'){loadedId=id;player.loadVideoById(id);}
+  else if(action==='play')player.playVideo();
+  else if(action==='pause')player.pauseVideo();
+  else if(action==='seek')player.seekTo(Math.max(0,seconds),true);
+  else if(action==='sync')status.textContent='Standalone preview: not connected to a Unity session.';
+}
+// Unity supplies an absolute current content position, not a browser clock timestamp.
+window.SinRPTV={
+  connect(object,method){bridge={object,method};report({type:'ready',ready});},
+  applyState(state){
+    if(!state || !/^[A-Za-z0-9_-]{11}$/.test(state.videoId||''))return;
+    if(!Number.isFinite(state.seconds)||state.seconds<0)return;
+    if(Number.isFinite(state.revision)&&state.revision<revision)return;
+    pending=state;if(!ready)return;
+    if(Number.isFinite(state.revision))revision=state.revision;
+    if(loadedId!==state.videoId){loadedId=state.videoId;player.cueVideoById({videoId:loadedId,startSeconds:state.seconds});}
+    else if(Math.abs(player.getCurrentTime()-state.seconds)>2)player.seekTo(state.seconds,true);
+    if(state.playing)player.playVideo();else player.pauseVideo();
+    status.textContent='Connected to domicile TV. Playback may differ during ads or buffering.';
+  },
+  requestStatus(){if(ready)report({type:'playback',videoId:loadedId,seconds:player.getCurrentTime(),state:player.getPlayerState()});}
+};
+window.onYouTubeIframeAPIReady=function(){
+  player=new YT.Player('player',{width:'100%',height:'100%',playerVars:{playsinline:1,origin:location.origin},events:{
+    onReady(){ready=true;status.textContent='Ready. Enter a YouTube video link.';report({type:'ready',ready:true});if(pending)window.SinRPTV.applyState(pending);},
+    onError(event){status.textContent='YouTube playback error '+event.data+'. This video may not allow embedding, or the browser may need configuration.';report({type:'error',code:event.data});},
+    onAutoplayBlocked(){status.textContent='Playback needs a local tap on the YouTube player.';report({type:'autoplayBlocked'});}
+  }});
+};
+document.getElementById('loadForm').addEventListener('submit',event=>{event.preventDefault();const id=videoId(document.getElementById('video').value);if(!id){status.textContent='Enter a valid YouTube video link or 11-character video ID.';return;}command('load',0,id);});
+document.getElementById('play').onclick=()=>command('play');
+document.getElementById('pause').onclick=()=>command('pause');
+document.getElementById('back').onclick=()=>command('seek',ready?player.getCurrentTime()-10:0);
+document.getElementById('forward').onclick=()=>command('seek',ready?player.getCurrentTime()+10:0);
+document.getElementById('sync').onclick=()=>command('sync');
+const api=document.createElement('script');api.src='https://www.youtube.com/iframe_api';api.onerror=()=>{status.textContent='Could not reach YouTube. Check your internet connection.';};document.head.appendChild(api);
+</script>
+</body></html>
